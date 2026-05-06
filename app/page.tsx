@@ -49,6 +49,23 @@ type ToastMessage = {
   onUndo: () => void;
 };
 
+type TourTarget =
+  | "library"
+  | "filters"
+  | "left-nav"
+  | "cards"
+  | "card-menu"
+  | "sidebar-menu"
+  | "toast";
+
+type TourStep = {
+  target: TourTarget;
+  eyebrow: string;
+  title: string;
+  body: string;
+  hint: string;
+};
+
 const sortOptions = ["Alphabetical", "Hours Played", "Last Played"] as const;
 
 type SortOption = (typeof sortOptions)[number];
@@ -140,6 +157,134 @@ const CARD_MENU_WIDTH = 236;
 const MANAGE_MENU_WIDTH = 260;
 const CARD_MENU_GAP = 12;
 const VIEWPORT_GUTTER = 16;
+const TOUR_SEEN_STORAGE_KEY = "ea-library-tour-seen";
+
+const tourSteps: TourStep[] = [
+  {
+    target: "filters",
+    eyebrow: "Find games fast",
+    title: "Search and sort the library",
+    body: "Search filters games by title or genre while the compact sort button switches between Alphabetical, Hours Played, and Last Played.",
+    hint: "Try typing “FC” or sorting by Hours Played after the tour.",
+  },
+  {
+    target: "left-nav",
+    eyebrow: "Expandable categories",
+    title: "All, Favorited, and Hidden tabs",
+    body: "The left nav has independent category navigation and smooth dropdowns. Clicking the label changes the main view; clicking plus or minus expands the list. Each game row also supports right-click or control-click for the same manage menu as the main cards.",
+    hint: "The left nav scrolls independently when every category is open.",
+  },
+  {
+    target: "card-menu",
+    eyebrow: "Power menu",
+    title: "Right-click or control-click a card",
+    body: "Use right-click or control-click on any game card to open the custom menu. Manage opens a submenu for hiding, privacy-style actions, and account options.",
+    hint: "The menu flips left or right automatically so it never creates horizontal scroll.",
+  },
+  {
+    target: "toast",
+    eyebrow: "Safe actions",
+    title: "Undo with animated toasts",
+    body: "Favoriting or hiding a game triggers a smooth toast with Undo, so users can quickly reverse accidental actions.",
+    hint: "Try hiding a game from Manage, then press Undo in the toast.",
+  },
+];
+
+const tourPanelPositions: Record<
+  TourTarget,
+  { left: string; top: string; transform: string }
+> = {
+  library: {
+    left: "calc(100vw - min(480px, calc(100vw - 56px)) - 112px)",
+    top: "62px",
+    transform: "translate3d(0, 0, 0)",
+  },
+  filters: {
+    left: "50%",
+    top: "154px",
+    transform: "translate3d(-50%, 0, 0)",
+  },
+  "left-nav": {
+    left: "calc(16.6667vw + 22px)",
+    top: "220px",
+    transform: "translate3d(0, 0, 0)",
+  },
+  cards: {
+    left: "50%",
+    top: "250px",
+    transform: "translate3d(-35%, 0, 0)",
+  },
+  "card-menu": {
+    left: "54%",
+    top: "220px",
+    transform: "translate3d(-15%, 0, 0)",
+  },
+  "sidebar-menu": {
+    left: "calc(16.6667vw + 22px)",
+    top: "360px",
+    transform: "translate3d(0, 0, 0)",
+  },
+  toast: {
+    left: "50%",
+    top: "calc(100vh - 480px)",
+    transform: "translate3d(-50%, 0, 0)",
+  },
+};
+
+const tourSpotlights: Record<
+  TourTarget,
+  { left: string; top: string; width: string; height: string; radius: string }
+> = {
+  library: {
+    left: "calc(16.6667vw + 32px)",
+    top: "50px",
+    width: "calc(83.3333vw - 128px)",
+    height: "76px",
+    radius: "22px",
+  },
+  filters: {
+    left: "calc(16.6667vw + 40px)",
+    top: "166px",
+    width: "calc(83.3333vw - 136px)",
+    height: "58px",
+    radius: "18px",
+  },
+  "left-nav": {
+    left: "8px",
+    top: "128px",
+    width: "calc(16.6667vw - 16px)",
+    height: "calc(100vh - 148px)",
+    radius: "24px",
+  },
+  cards: {
+    left: "calc(16.6667vw + 38px)",
+    top: "220px",
+    width: "calc(83.3333vw - 132px)",
+    height: "calc(100vh - 315px)",
+    radius: "30px",
+  },
+  "card-menu": {
+    left: "calc(16.6667vw + 38px)",
+    top: "245px",
+    width: "520px",
+    height: "420px",
+    radius: "30px",
+  },
+  "sidebar-menu": {
+    left: "8px",
+    top: "260px",
+    width: "calc(16.6667vw + 300px)",
+    height: "320px",
+    radius: "26px",
+  },
+  toast: {
+    left: "calc(50vw - 270px)",
+    top: "calc(100vh - 92.5px)",
+    width: "540px",
+    height: "76px",
+    radius: "24px",
+  },
+};
 
 function sortGames(gamesToSort: Game[], sortOption: SortOption) {
   return [...gamesToSort].sort((a, b) => {
@@ -169,6 +314,9 @@ export default function Home() {
   const [hiddenExpanded, setHiddenExpanded] = useState(false);
   const [toast, setToast] = useState<ToastMessage | null>(null);
   const [toastVisible, setToastVisible] = useState(false);
+  const [tourActive, setTourActive] = useState(false);
+  const [tourStepIndex, setTourStepIndex] = useState(0);
+  const [showSkipTour, setShowSkipTour] = useState(false);
   const toastTimeoutRef = useRef<number | null>(null);
 
   const hiddenGames = games.filter((game) => game.hidden);
@@ -196,6 +344,38 @@ export default function Home() {
       : libraryView === "favorites"
         ? "Favorited games"
         : "Library";
+  const activeTourStep = tourActive ? tourSteps[tourStepIndex] : null;
+  const isTourTarget = (target: TourTarget) =>
+    activeTourStep?.target === target;
+
+  const startTour = () => {
+    setShowSkipTour(false);
+    setTourStepIndex(0);
+    setTourActive(true);
+    setAllGamesExpanded(true);
+    setFavoritesExpanded(true);
+  };
+
+  const closeTour = () => {
+    setShowSkipTour(false);
+    setTourActive(false);
+  };
+
+  const goToNextTourStep = () => {
+    setTourStepIndex((currentStep) => {
+      if (currentStep === tourSteps.length - 1) {
+        setShowSkipTour(false);
+        setTourActive(false);
+        return currentStep;
+      }
+
+      return currentStep + 1;
+    });
+  };
+
+  const goToPreviousTourStep = () => {
+    setTourStepIndex((currentStep) => Math.max(0, currentStep - 1));
+  };
 
   const dismissToast = () => {
     if (toastTimeoutRef.current) {
@@ -309,10 +489,65 @@ export default function Home() {
     };
   }, []);
 
+  useEffect(() => {
+    if (window.localStorage.getItem(TOUR_SEEN_STORAGE_KEY) === "true") {
+      return;
+    }
+
+    window.localStorage.setItem(TOUR_SEEN_STORAGE_KEY, "true");
+    setShowSkipTour(true);
+    setTourStepIndex(0);
+    setTourActive(true);
+    setAllGamesExpanded(true);
+    setFavoritesExpanded(true);
+  }, []);
+
+  useEffect(() => {
+    if (!tourActive || tourSteps[tourStepIndex]?.target !== "toast") return;
+
+    showToast({
+      message: "Demo toast: The Sims\u2122 4 hidden",
+      undoLabel: "Undo",
+      onUndo: () => undefined,
+    });
+
+    return () => {
+      dismissToast();
+    };
+  }, [tourActive, tourStepIndex]);
+
+  useEffect(() => {
+    if (!tourActive) return;
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        closeTour();
+      }
+      if (event.key === "ArrowRight") {
+        goToNextTourStep();
+      }
+      if (event.key === "ArrowLeft") {
+        goToPreviousTourStep();
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [tourActive]);
+
   return (
     <div className="flex h-screen w-full overflow-hidden text-[13px] text-zinc-300 bg-[#171b2a] select-none">
       {/* ============== LEFT SIDEBAR ============== */}
-      <aside className="flex h-screen w-1/6 min-h-0 shrink-0 flex-col bg-[#171b2a]">
+      <aside
+        className={`flex h-screen w-1/6 min-h-0 shrink-0 flex-col bg-[#171b2a] transition-[box-shadow,filter] duration-300 ${
+          isTourTarget("left-nav")
+            ? "relative z-40 shadow-[0_0_0_2px_rgba(39,106,252,0.9),0_0_60px_rgba(39,106,252,0.38)]"
+            : ""
+        }`}
+      >
         {/* Primary nav */}
         <nav className="pt-2">
           <NavItem icon={<HomeIcon />} label="Home" />
@@ -513,17 +748,32 @@ export default function Home() {
         </div>
 
         {/* Page header */}
-        <div className="flex items-center justify-between gap-4 px-10 pt-4">
+        <div
+          className={`flex items-center justify-between gap-4 px-10 pt-4 transition-[box-shadow,filter] duration-300 ${
+            isTourTarget("library")
+              ? "relative z-40 rounded-2xl shadow-[0_0_0_2px_rgba(39,106,252,0.9),0_0_60px_rgba(39,106,252,0.35)]"
+              : ""
+          }`}
+        >
           <h1 className="text-[28px] font-bold tracking-tight text-zinc-100">
             {pageTitle}
           </h1>
-          <button
-            type="button"
-            className="flex items-center gap-2 rounded-lg border-2 border-[#276afc] px-4 py-1.5 text-xs font-bold tracking-widest text-zinc-200 hover:cursor-pointer hover:bg-white/5"
-          >
-            <PlusIcon />
-            REDEEM CODE
-          </button>
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={startTour}
+              className="rounded-lg border-2 border-white/15 px-4 py-1.5 text-xs font-bold tracking-widest text-zinc-200 transition-colors hover:cursor-pointer hover:border-[#276afc] hover:bg-white/5"
+            >
+              START TOUR
+            </button>
+            <button
+              type="button"
+              className="flex items-center gap-2 rounded-lg border-2 border-[#276afc] px-4 py-1.5 text-xs font-bold tracking-widest text-zinc-200 hover:cursor-pointer hover:bg-white/5"
+            >
+              <PlusIcon />
+              REDEEM CODE
+            </button>
+          </div>
         </div>
         <div className="px-10">
           <div className="mt-3 h-0.5 w-full bg-[#262838]" />
@@ -544,7 +794,13 @@ export default function Home() {
                 </span>
               </h2>
             </div>
-            <div className="flex w-full items-center gap-3">
+            <div
+              className={`flex w-full items-center gap-3 transition-[box-shadow,filter] duration-300 ${
+                isTourTarget("filters")
+                  ? "relative z-40 rounded-2xl shadow-[0_0_0_2px_rgba(39,106,252,0.9),0_0_60px_rgba(39,106,252,0.35)]"
+                  : ""
+              }`}
+            >
               <label className="relative flex-1">
                 <span className="sr-only">Search games</span>
                 <span className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-zinc-500">
@@ -604,7 +860,15 @@ export default function Home() {
               </div>
             </div>
           </div>
-          <div className="grid grid-cols-[repeat(auto-fill,minmax(220px,240px))] justify-start gap-6 pb-10">
+          <div
+            className={`grid grid-cols-[repeat(auto-fill,minmax(220px,240px))] justify-start gap-6 pb-10 transition-[box-shadow,filter] duration-300 ${
+              isTourTarget("cards") ||
+              isTourTarget("card-menu") ||
+              isTourTarget("toast")
+                ? "relative z-40 rounded-3xl shadow-[0_0_0_2px_rgba(39,106,252,0.9),0_0_70px_rgba(39,106,252,0.32)]"
+                : ""
+            }`}
+          >
             {sortedGames.map((game) => (
               <GameCard
                 key={game.id}
@@ -686,6 +950,18 @@ export default function Home() {
           toast={toast}
           visible={toastVisible}
           onDismiss={dismissToast}
+        />
+      ) : null}
+      {activeTourStep ? (
+        <TourOverlay
+          step={activeTourStep}
+          stepIndex={tourStepIndex}
+          totalSteps={tourSteps.length}
+          showSkip={showSkipTour}
+          onClose={closeTour}
+          onSkip={closeTour}
+          onPrevious={goToPreviousTourStep}
+          onNext={goToNextTourStep}
         />
       ) : null}
     </div>
@@ -962,6 +1238,184 @@ function ActionToast({
         </button>
       </div>
     </div>
+  );
+}
+
+function TourOverlay({
+  step,
+  stepIndex,
+  totalSteps,
+  showSkip,
+  onClose,
+  onSkip,
+  onPrevious,
+  onNext,
+}: {
+  step: TourStep;
+  stepIndex: number;
+  totalSteps: number;
+  showSkip: boolean;
+  onClose: () => void;
+  onSkip: () => void;
+  onPrevious: () => void;
+  onNext: () => void;
+}) {
+  const isLastStep = stepIndex === totalSteps - 1;
+  const panelPosition = tourPanelPositions[step.target];
+  const spotlight = tourSpotlights[step.target];
+
+  return createPortal(
+    <div className="pointer-events-none fixed inset-0 z-90">
+      <TourSpotlight spotlight={spotlight} />
+      <div
+        className="pointer-events-auto fixed w-[min(440px,calc(100vw-56px))] animate-[tourFloatIn_360ms_cubic-bezier(.2,.8,.2,1)] transition-[top,left,transform] duration-700 ease-[cubic-bezier(.2,.8,.2,1)]"
+        style={panelPosition}
+      >
+        <div className="overflow-hidden rounded-[28px] border border-white/10 bg-[#252a3a]/95 text-zinc-100 shadow-[0_32px_90px_rgba(0,0,0,0.58)] backdrop-blur-xl">
+          <div className="relative h-1.5 bg-[#151a29]">
+            <div
+              className="absolute inset-y-0 left-0 rounded-r-full bg-[#276afc] transition-[width] duration-500 ease-out"
+              style={{ width: `${((stepIndex + 1) / totalSteps) * 100}%` }}
+            />
+          </div>
+          <div className="p-6">
+            <div className="mb-5 flex items-start justify-between gap-4">
+              <div>
+                <p className="text-[11px] font-black uppercase tracking-[0.2em] text-[#7da6ff]">
+                  {step.eyebrow}
+                </p>
+                <h2 className="mt-2 text-[24px] font-black leading-tight tracking-tight text-white">
+                  {step.title}
+                </h2>
+              </div>
+              <button
+                type="button"
+                aria-label="Close tour"
+                onClick={onClose}
+                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl text-zinc-400 transition-colors hover:bg-white/10 hover:text-white"
+              >
+                ×
+              </button>
+            </div>
+
+            <p className="text-[14px] font-medium leading-6 text-zinc-300">
+              {step.body}
+            </p>
+
+            <div className="mt-5 rounded-2xl border border-[#276afc]/30 bg-[#1c2440] px-4 py-3 text-[13px] font-semibold leading-5 text-[#cddcff]">
+              {step.hint}
+            </div>
+
+            <div className="mt-6 flex items-center justify-between gap-4">
+              <div className="flex items-center gap-1.5">
+                {Array.from({ length: totalSteps }).map((_, index) => (
+                  <span
+                    key={index}
+                    className={`h-1.5 rounded-full transition-all duration-300 ${
+                      index === stepIndex
+                        ? "w-7 bg-[#276afc]"
+                        : "w-1.5 bg-white/20"
+                    }`}
+                  />
+                ))}
+              </div>
+              <div className="flex items-center gap-2">
+                {showSkip ? (
+                  <button
+                    type="button"
+                    onClick={onSkip}
+                    className="rounded-lg px-4 py-2 text-xs font-bold uppercase tracking-[0.12em] text-zinc-400 transition-colors hover:bg-white/10 hover:text-white"
+                  >
+                    Skip
+                  </button>
+                ) : null}
+                <button
+                  type="button"
+                  onClick={onPrevious}
+                  disabled={stepIndex === 0}
+                  className="rounded-lg border border-white/10 px-4 py-2 text-xs font-bold uppercase tracking-[0.12em] text-zinc-200 transition-colors hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-35"
+                >
+                  Back
+                </button>
+                <button
+                  type="button"
+                  onClick={onNext}
+                  className="rounded-lg bg-[#276afc] px-4 py-2 text-xs font-black uppercase tracking-[0.12em] text-white transition-transform hover:-translate-y-0.5 hover:bg-[#3f7fff]"
+                >
+                  {isLastStep ? "Finish" : "Next"}
+                </button>
+              </div>
+            </div>
+
+            <p className="mt-4 text-[11px] font-semibold text-zinc-500">
+              Tip: use ← / → to move through the tour, or Esc to close.
+            </p>
+          </div>
+        </div>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
+function TourSpotlight({
+  spotlight,
+}: {
+  spotlight: {
+    left: string;
+    top: string;
+    width: string;
+    height: string;
+    radius: string;
+  };
+}) {
+  const sharedPanelClass =
+    "fixed bg-[rgba(8,11,21,0.48)] backdrop-blur-[2px] transition-[top,left,right,bottom,width,height] duration-700 ease-[cubic-bezier(.2,.8,.2,1)]";
+
+  return (
+    <>
+      <div
+        className={sharedPanelClass}
+        style={{ left: 0, top: 0, right: 0, height: spotlight.top }}
+      />
+      <div
+        className={sharedPanelClass}
+        style={{
+          left: 0,
+          top: `calc(${spotlight.top} + ${spotlight.height})`,
+          right: 0,
+          bottom: 0,
+        }}
+      />
+      <div
+        className={sharedPanelClass}
+        style={{
+          left: 0,
+          top: spotlight.top,
+          width: spotlight.left,
+          height: spotlight.height,
+        }}
+      />
+      <div
+        className={sharedPanelClass}
+        style={{
+          left: `calc(${spotlight.left} + ${spotlight.width})`,
+          top: spotlight.top,
+          right: 0,
+          height: spotlight.height,
+        }}
+      />
+      <div
+        className="fixed border-2 border-[#276afc] shadow-[0_0_0_1px_rgba(255,255,255,0.12),0_0_70px_rgba(39,106,252,0.38)] transition-[top,left,width,height,border-radius] duration-700 ease-[cubic-bezier(.2,.8,.2,1)]"
+        style={{
+          left: spotlight.left,
+          top: spotlight.top,
+          width: spotlight.width,
+          height: spotlight.height,
+          borderRadius: spotlight.radius,
+        }}
+      />
+    </>
   );
 }
 
